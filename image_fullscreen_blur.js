@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Fullscreen Image Scaler with Background Blur
 // @namespace    http://tampermonkey.net/
-// @version      1.9
-// @description  Scales the largest visible image to screen height, blurs background, allows arrow key passthrough, with draggable 🖥️ toggle button at center-right of image
+// @version      1.11
+// @description  Scales the largest visible image to screen height, blurs background, allows arrow key passthrough, with stable draggable 🖥️ toggle button at center-right of image
 // @author       Grok
 // @match        *://*/*
 // @grant        none
@@ -18,6 +18,7 @@
     let observer = null;
     let contentWrapper = null;
     let isProcessing = false;
+    let lastButtonUpdate = 0;
 
     // Ensure DOM is loaded before initialization
     function initializeScript() {
@@ -101,10 +102,21 @@
     function ensureToggleButton() {
         const parent = document.body || document.documentElement;
         if (!document.getElementById('fullscreen-image-toggle-button')) {
+            console.debug('Creating toggle button');
             try {
                 parent.appendChild(createToggleButton());
+                updateButtonPosition(); // Update position after creating
             } catch (e) {
                 console.error('Failed to append toggle button:', e);
+                // Fallback to documentElement if body fails
+                if (parent !== document.documentElement) {
+                    try {
+                        document.documentElement.appendChild(createToggleButton());
+                        updateButtonPosition();
+                    } catch (e2) {
+                        console.error('Fallback append to documentElement failed:', e2);
+                    }
+                }
             }
         }
 
@@ -114,44 +126,80 @@
                 console.warn('Toggle button missing, attempting to recreate');
                 try {
                     parent.appendChild(createToggleButton());
+                    updateButtonPosition(); // Update position after recreating
                 } catch (e) {
                     console.error('Failed to re-append toggle button:', e);
+                    // Fallback to documentElement
+                    if (parent !== document.documentElement) {
+                        try {
+                            document.documentElement.appendChild(createToggleButton());
+                            updateButtonPosition();
+                        } catch (e2) {
+                            console.error('Fallback append to documentElement failed:', e2);
+                        }
+                    }
                 }
             }
-            updateButtonPosition(); // Update position periodically
-        }, 2000);
+        }, 500); // Increased frequency for faster recovery
 
         // Observe DOM to recreate button if removed
         const buttonObserver = new MutationObserver(() => {
             if (!document.getElementById('fullscreen-image-toggle-button')) {
-                console.warn('Toggle button removed, recreating');
+                console.warn('Toggle button removed by DOM mutation, recreating');
                 try {
                     parent.appendChild(createToggleButton());
+                    updateButtonPosition(); // Update position after recreating
                 } catch (e) {
                     console.error('Failed to recreate toggle button:', e);
+                    // Fallback to documentElement
+                    if (parent !== document.documentElement) {
+                        try {
+                            document.documentElement.appendChild(createToggleButton());
+                            updateButtonPosition();
+                        } catch (e2) {
+                            console.error('Fallback append to documentElement failed:', e2);
+                        }
+                    }
                 }
             }
         });
-        buttonObserver.observe(parent, { childList: true, subtree: true });
+        buttonObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    // Debounce function to limit update frequency
+    function debounce(func, wait) {
+        let timeout;
+        return function(...args) {
+            clearTimeout(timeout);
+            timeout = setTimeout(() => func.apply(this, args), wait);
+        };
     }
 
     // Update button position to center-right of scaled image or page center
-    function updateButtonPosition() {
+    const updateButtonPosition = debounce(() => {
         if (!toggleButton) return;
-        // Check if the button has been dragged (custom position)
-        if (toggleButton.style.transform === 'none') return; // Skip if dragged
+        // Skip if button has been dragged
+        if (toggleButton.style.transform === 'none') return;
+
+        const now = Date.now();
+        if (now - lastButtonUpdate < 100) return; // Throttle updates
+        lastButtonUpdate = now;
 
         if (isFullscreenMode && scaledImage) {
             const imgRect = scaledImage.getBoundingClientRect();
             toggleButton.style.left = `${imgRect.right + 10}px`; // 10px offset from image right
             toggleButton.style.top = `${imgRect.top + imgRect.height / 2}px`;
             toggleButton.style.transform = 'translateY(-50%)'; // Center vertically
+            toggleButton.style.right = 'auto';
+            toggleButton.style.bottom = 'auto';
         } else {
             toggleButton.style.left = '50%';
             toggleButton.style.top = '50%';
             toggleButton.style.transform = 'translate(-50%, -50%)'; // Center on page
+            toggleButton.style.right = 'auto';
+            toggleButton.style.bottom = 'auto';
         }
-    }
+    }, 100);
 
     // Check if an element is at least partially in the viewport
     function isElementInViewport(el) {
@@ -260,6 +308,7 @@
                 subtree: true,
                 attributeFilter: ['src', 'class']
             });
+            ensureToggleButton(); // Ensure button is present when entering fullscreen
         } else {
             toggleButton.textContent = '🖥️';
             contentWrapper.style.filter = 'none';
@@ -278,7 +327,7 @@
                 observer = null;
             }
             updateButtonPosition(); // Reset button to page center
-            ensureToggleButton();
+            ensureToggleButton(); // Ensure button is present when exiting fullscreen
         }
     }
 
